@@ -5,6 +5,10 @@ Arquitetura simples baseada no diagrama, usando:
 - **Caixas lisas (sincrono)**: rotas HTTP no Flask.
 - **Caixas listradas (assincrono)**: eventos em uma fila Python (`queue.Queue`) processados por worker em background.
 
+## Diagrama de arquitetura
+
+![Diagrama de arquitetura](./arquitetura/diagrama-arquitetura.png)
+
 ## Mapeamento do diagrama
 
 ### Sincrono (HTTP)
