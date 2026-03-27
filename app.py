@@ -5,9 +5,10 @@ import time
 from queue import Queue
 from functools import wraps
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key")  # para session (demo)
 
 # Evita cache de template/static durante testes (reduz chance de ver "pagina antiga")
 app.config["TEMPLATES_AUTO_RELOAD"] = True
@@ -27,6 +28,7 @@ PAYMENT_TIMEOUT = float(os.getenv("PAYMENT_TIMEOUT", "5.0"))
 PAYMENT_MAX_RETRIES = int(os.getenv("PAYMENT_MAX_RETRIES", "3"))
 PAYMENT_DELAY_SECONDS = float(os.getenv("PAYMENT_DELAY_SECONDS", "0.0"))
 PORT = int(os.getenv("PORT", "5000"))
+LOGIN_PASSWORD = os.getenv("LOGIN_PASSWORD", "1234")
 
 # Estado da fila e eventos
 event_queue = Queue()
@@ -39,6 +41,12 @@ SIMULATION_MODE = os.getenv("SIMULATION_MODE", "normal")  # normal, timeout, fal
 
 
 # ============== FUNDAMENTOS DE RESILIÊNCIA ==============
+
+def get_user_display_name(email):
+    """Retorna nome de exibição a partir do e-mail (parte antes de @)."""
+    if not email:
+        return ""
+    return str(email).split("@", 1)[0].strip()
 
 def log_event(event_type, payload):
     """Publica evento na fila e no log"""
@@ -176,12 +184,58 @@ def login():
     body = request.get_json(silent=True) or {}
     if not body.get("email"):
         return jsonify({"ok": False, "error": "email obrigatorio"}), 400
+    if not body.get("senha"):
+        return jsonify({"ok": False, "error": "senha obrigatoria"}), 400
+    if str(body.get("senha")) != LOGIN_PASSWORD:
+        return jsonify({"ok": False, "error": "senha invalida"}), 401
+    session["user_email"] = body["email"]
+    session.pop("entrada_liberada", None)
     return jsonify({"ok": True, "etapa": "login_conta"})
 
 
 @app.get("/")
 def index():
-    return render_template("index_ui.html")
+    if session.get("user_email"):
+        return redirect(url_for("produtos_page"))
+    return redirect(url_for("login_page"))
+
+
+@app.get("/login")
+def login_page():
+    if session.get("user_email"):
+        return redirect(url_for("entrada_page"))
+    return render_template("login.html")
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.get("/produtos")
+def produtos_page():
+    if not session.get("user_email"):
+        return redirect(url_for("login_page"))
+    return render_template(
+        "produtos.html",
+        user_email=session.get("user_email"),
+        user_name=get_user_display_name(session.get("user_email")),
+        entrada_liberada=bool(session.get("entrada_liberada")),
+    )
+
+
+@app.get("/entrada")
+def entrada_page():
+    if not session.get("user_email"):
+        return redirect(url_for("login_page"))
+    if session.get("entrada_liberada"):
+        return redirect(url_for("produtos_page"))
+    return render_template(
+        "entrada.html",
+        user_email=session.get("user_email"),
+        user_name=get_user_display_name(session.get("user_email")),
+    )
 
 
 @app.post("/entrada/liberar")
@@ -189,6 +243,7 @@ def liberar_entrada():
     body = request.get_json(silent=True) or {}
     if not body.get("qrCode"):
         return jsonify({"ok": False, "error": "qrCode obrigatorio"}), 400
+    session["entrada_liberada"] = True
     return jsonify({"ok": True, "etapa": "qr_code_entrada_liberada"})
 
 
@@ -199,14 +254,54 @@ def adicionar_carrinho():
     if any(field not in body for field in required):
         return jsonify({"ok": False, "error": "productId, nome e preco sao obrigatorios"}), 400
 
+    quantidade = int(body.get("quantidade", 1))
+    if quantidade <= 0:
+        return jsonify({"ok": False, "error": "quantidade deve ser maior que zero"}), 400
+
     item = {
         "productId": body["productId"],
         "nome": body["nome"],
         "preco": float(body["preco"]),
-        "quantidade": int(body.get("quantidade", 1)),
+        "quantidade": quantidade,
     }
     cart.append(item)
     return jsonify({"ok": True, "etapa": "incluir_produto", "itensNoCarrinho": len(cart)})
+
+
+@app.post("/carrinho/remover")
+def remover_carrinho():
+    body = request.get_json(silent=True) or {}
+    product_id = body.get("productId")
+    if not product_id:
+        return jsonify({"ok": False, "error": "productId obrigatorio"}), 400
+
+    quantidade_remover = int(body.get("quantidade", 1))
+    if quantidade_remover <= 0:
+        return jsonify({"ok": False, "error": "quantidade deve ser maior que zero"}), 400
+
+    restante = quantidade_remover
+    novo_cart = []
+
+    for item in cart:
+        if item["productId"] != product_id or restante == 0:
+            novo_cart.append(item)
+            continue
+
+        if item["quantidade"] <= restante:
+            restante -= item["quantidade"]
+            continue
+
+        item_atualizado = dict(item)
+        item_atualizado["quantidade"] = item["quantidade"] - restante
+        restante = 0
+        novo_cart.append(item_atualizado)
+
+    if restante == quantidade_remover:
+        return jsonify({"ok": False, "error": "produto nao encontrado no carrinho"}), 404
+
+    cart.clear()
+    cart.extend(novo_cart)
+    return jsonify({"ok": True, "etapa": "remover_produto", "itensNoCarrinho": len(cart)})
 
 
 @app.post("/pedido/confirmar")
@@ -218,9 +313,6 @@ def confirmar_pedido():
     order_id = f"ord_{int(time.time() * 1000)}"
     total = round(sum(i["preco"] * i["quantidade"] for i in itens), 2)
     publish_event("pedido_confirmado", {"orderId": order_id, "total": total})
-
-    # Limpa o carrinho apos confirmar pedido para evitar repetir itens em pedidos seguintes.
-    cart.clear()
 
     return jsonify(
         {
@@ -258,6 +350,8 @@ def realizar_pagamento():
             "total": total, 
             "attempts": attempts
         })
+        # Limpa o carrinho apenas quando pagamento foi aprovado.
+        cart.clear()
         
         return jsonify({
             "ok": True, 

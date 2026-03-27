@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mercadinho 24h</title>
+    <title>Produtos - Mercadinho 24h</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
@@ -11,16 +11,12 @@
       <header class="header">
         <div>
           <h1>Mercadinho 24h 🛒</h1>
-          <p class="subtitle">Teste rapido do fluxo 24h (fila + resiliencia)</p>
+          <p class="subtitle">Produtos + carrinho + pagamento (fila + resiliência)</p>
         </div>
         <div class="topbar">
           <div class="mini-form">
-            <input id="email" type="email" placeholder="email@mercado.com" value="user@mercado.com" />
-            <button id="btn-login" type="button">Login</button>
-          </div>
-          <div class="mini-form">
-            <input id="qrCode" type="text" placeholder="QR" value="QR-OK-001" />
-            <button id="btn-qr" type="button">Liberar</button>
+            <input type="text" value="{{ user_name or '' }}" disabled style="width: 220px;" />
+            <button id="btn-sair" type="button">Sair</button>
           </div>
         </div>
       </header>
@@ -34,16 +30,19 @@
         </section>
 
         <aside class="panel cart-panel">
-          <div class="panel-title">Seu Carrinho</div>
+          <div class="panel-title">Carrinho</div>
 
+          <div id="cart-items" class="muted small" style="display: grid; gap: 8px; margin-bottom: 12px;">
+            Carrinho vazio.
+          </div>
           <div class="cart-meta">
-            <div class="meta-line">
-              <span>Total:</span>
-              <strong id="cart-total">R$ 0,00</strong>
-            </div>
             <div class="meta-line muted">
               <span>Itens:</span>
               <span id="cart-count">0</span>
+            </div>
+            <div class="meta-line">
+              <span>Valor total:</span>
+              <strong id="cart-total">R$ 0,00</strong>
             </div>
           </div>
 
@@ -84,17 +83,14 @@
       const productGrid = document.getElementById("product-grid");
       const cartTotalEl = document.getElementById("cart-total");
       const cartCountEl = document.getElementById("cart-count");
+      const cartItemsEl = document.getElementById("cart-items");
       const paymentModeEl = document.getElementById("payment-mode");
       const btnFinalizar = document.getElementById("btn-finalizar");
       const btnConsultar = document.getElementById("btn-consultar");
       const saidaStatusEl = document.getElementById("saida-status");
 
-      const emailEl = document.getElementById("email");
-      const qrCodeEl = document.getElementById("qrCode");
-
-      let entradaLiberada = false;
-      let cartCount = 0;
-      let cartTotal = 0;
+      let entradaLiberada = {{ "true" if entrada_liberada else "false" }};
+      let cartItems = [];
       let lastOrderId = "";
       let lastTotal = 0;
 
@@ -103,6 +99,61 @@
       function setStatus(text, kind) {
         statusEl.textContent = text;
         statusEl.className = "status" + (kind === "ok" ? " ok" : kind === "err" ? " err" : "");
+      }
+
+      function getCartCount() {
+        return cartItems.reduce((acc, item) => acc + item.quantidade, 0);
+      }
+
+      function getCartTotal() {
+        return cartItems.reduce((acc, item) => acc + (item.preco * item.quantidade), 0);
+      }
+
+      function refreshCartMeta() {
+        const cartCount = getCartCount();
+        const cartTotal = getCartTotal();
+        cartTotalEl.textContent = fmtBRL(cartTotal);
+        cartCountEl.textContent = cartCount.toString();
+        btnFinalizar.disabled = !entradaLiberada || cartCount === 0;
+      }
+
+      function renderCartItems() {
+        if (cartItems.length === 0) {
+          cartItemsEl.innerHTML = "Carrinho vazio.";
+          return;
+        }
+
+        cartItemsEl.innerHTML = "";
+        for (const item of cartItems) {
+          const row = document.createElement("div");
+          row.style.display = "flex";
+          row.style.alignItems = "center";
+          row.style.justifyContent = "space-between";
+          row.style.gap = "8px";
+          row.innerHTML = `
+            <span>${item.nome} (x${item.quantidade})</span>
+            <button type="button" data-product-id="${item.productId}" class="remove-circle" aria-label="Remover uma unidade" title="Remover uma unidade">-</button>
+          `;
+
+          row.querySelector(".remove-circle").addEventListener("click", async () => {
+            await removerDoCarrinho(item.productId);
+          });
+          cartItemsEl.appendChild(row);
+        }
+      }
+
+      function upsertLocalItem(p, quantidade) {
+        const existente = cartItems.find((item) => item.productId === p.productId);
+        if (existente) {
+          existente.quantidade += quantidade;
+          return;
+        }
+        cartItems.push({
+          productId: p.productId,
+          nome: p.nome,
+          preco: p.preco,
+          quantidade,
+        });
       }
 
       async function api(path, method = "GET", body = null) {
@@ -132,33 +183,50 @@
           `;
           card.querySelector(".add").addEventListener("click", async () => {
             if (!entradaLiberada) {
-              setStatus("Liberar entrada por QR para iniciar o carrinho.", "err");
+              setStatus("Entrada nao liberada para adicionar produtos.", "err");
               return;
             }
-            await adicionarAoCarrinho(p);
+            await adicionarAoCarrinho(p, 1);
           });
           productGrid.appendChild(card);
         }
       }
 
-      async function adicionarAoCarrinho(p) {
+      async function adicionarAoCarrinho(p, quantidade) {
         setStatus("Adicionando item...", null);
         try {
           await api("/carrinho/adicionar", "POST", {
             productId: p.productId,
             nome: p.nome,
             preco: p.preco,
-            quantidade: 1,
+            quantidade,
           });
 
-          cartCount += 1;
-          cartTotal += p.preco;
-          cartTotalEl.textContent = fmtBRL(cartTotal);
-          cartCountEl.textContent = cartCount.toString();
-          btnFinalizar.disabled = !entradaLiberada || cartCount === 0;
+          upsertLocalItem(p, quantidade);
+          renderCartItems();
+          refreshCartMeta();
           btnConsultar.disabled = true;
           saidaStatusEl.textContent = "Saida: --";
           setStatus("Item adicionado.", "ok");
+        } catch (e) {
+          setStatus((e.data && (e.data.error || e.data.message)) || e.message, "err");
+        }
+      }
+
+      async function removerDoCarrinho(productId) {
+        setStatus("Removendo item...", null);
+        try {
+          await api("/carrinho/remover", "POST", { productId, quantidade: 1 });
+          const item = cartItems.find((i) => i.productId === productId);
+          if (item) {
+            item.quantidade -= 1;
+            if (item.quantidade <= 0) {
+              cartItems = cartItems.filter((i) => i.productId !== productId);
+            }
+          }
+          renderCartItems();
+          refreshCartMeta();
+          setStatus("Item removido.", "ok");
         } catch (e) {
           setStatus((e.data && (e.data.error || e.data.message)) || e.message, "err");
         }
@@ -197,7 +265,7 @@
       });
 
       btnFinalizar.addEventListener("click", async () => {
-        if (cartCount === 0) {
+        if (getCartCount() === 0) {
           setStatus("Carrinho vazio.", "err");
           return;
         }
@@ -207,15 +275,12 @@
           const pedido = await api("/pedido/confirmar", "POST");
           lastOrderId = pedido.orderId;
           lastTotal = pedido.total;
-          // O backend limpa o carrinho ao confirmar; zera o estado local para ficar consistente.
-          cartCount = 0;
-          cartTotal = 0;
-          cartTotalEl.textContent = fmtBRL(0);
-          cartCountEl.textContent = "0";
-          btnFinalizar.disabled = !entradaLiberada;
 
           try {
             await api("/pagamento/realizar", "POST", { orderId: lastOrderId, total: lastTotal });
+            cartItems = [];
+            renderCartItems();
+            refreshCartMeta();
             setStatus("Pagamento ok. Aguardando liberacao da saida...", "ok");
 
             const liberada = await esperarSaida(lastOrderId);
@@ -234,29 +299,20 @@
         }
       });
 
-      document.getElementById("btn-login").addEventListener("click", async () => {
+      document.getElementById("btn-sair").addEventListener("click", async () => {
         try {
-          await api("/login", "POST", { email: emailEl.value.trim() });
-          setStatus("Login ok.", "ok");
-        } catch (e) {
-          setStatus((e.data && (e.data.error || e.data.message)) || e.message, "err");
-        }
-      });
-
-      document.getElementById("btn-qr").addEventListener("click", async () => {
-        try {
-          await api("/entrada/liberar", "POST", { qrCode: qrCodeEl.value.trim() });
-          entradaLiberada = true;
-          setStatus("Entrada liberada. Selecione produtos.", "ok");
-          btnFinalizar.disabled = cartCount === 0;
-        } catch (e) {
-          setStatus((e.data && (e.data.error || e.data.message)) || e.message, "err");
+          await api("/logout", "POST");
+        } finally {
+          window.location.href = "/login";
         }
       });
 
       renderProducts();
-      cartTotalEl.textContent = fmtBRL(0);
-      cartCountEl.textContent = "0";
+      renderCartItems();
+      refreshCartMeta();
+      if (entradaLiberada) {
+        setStatus("Entrada já liberada. Selecione produtos.", "ok");
+      }
     </script>
   </body>
 </html>

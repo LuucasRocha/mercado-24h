@@ -1,5 +1,38 @@
 # 📋 Guia de Testes - Mercadinho 24h
 
+## ▶️ Como abrir e rodar o código (Windows / PowerShell)
+
+### Pré-requisitos
+- Python **3.10+** instalado (recomendado 3.12)
+- (Opcional) Docker Desktop, se quiser rodar via container
+
+### Opção A: Rodar com Python (recomendado)
+1. Abra o terminal **na pasta `mercado-24h`** (onde está o `app.py`).
+2. Crie e ative um ambiente virtual, instale dependências e rode:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python app.py
+```
+
+3. Abra no navegador: `http://localhost:5000/`
+
+### Opção B: Rodar com Docker
+1. Abra o terminal **na pasta `mercado-24h`**.
+2. Suba o container:
+
+```bash
+docker compose up --build
+```
+
+3. Abra no navegador: `http://localhost:5000/`
+
+### Se der erro (rápido)
+- Se `python` não for reconhecido: instale Python e marque **“Add Python to PATH”**.
+- Se a porta 5000 estiver ocupada: feche a app que estiver usando ou mude a porta no seu ambiente.
+
 ## Fundamentos de Resiliência Implementados
 
 ### 1. **RETRY** 🔄
@@ -41,11 +74,8 @@ Plano B quando retry falha todas as vezes.
 ## 🎮 Como Testar
 
 ### Preparação
-1. Inicie a aplicação:
-   ```bash
-   python app.py
-   ```
-2. Acesse: http://localhost:5000/
+1. Inicie a aplicação seguindo a seção **"Como abrir e rodar o código"** acima.
+2. Acesse: `http://localhost:5000/`
 
 ### Teste 1: RETRY
 

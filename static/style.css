@@ -190,6 +190,25 @@ button {
   background: var(--blue-700);
 }
 
+.remove-circle {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.remove-circle:hover {
+  background: #b91c1c;
+}
+
 .cart-meta {
   margin-bottom: 10px;
 }
